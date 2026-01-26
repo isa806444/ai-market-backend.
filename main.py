@@ -3,9 +3,10 @@ from flask_cors import CORS
 import os
 import requests
 from statistics import mean
+from datetime import datetime
 
 app = Flask(__name__)
-CORS(app)  # <-- enables cross-origin requests from your static app
+CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
@@ -32,13 +33,19 @@ def analyze():
 
     symbol = symbol.upper()
 
-    # Pull last ~20 daily candles
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/day/2024-01-01/2026-12-31?limit=20&apiKey={POLYGON_KEY}"
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+
+    # Pull today's 1-minute candles so we get the *current* price
+    url = (
+        f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/minute/"
+        f"{today}/{today}?adjusted=true&sort=asc&limit=5000&apiKey={POLYGON_KEY}"
+    )
+
     r = requests.get(url, timeout=10)
     data = r.json()
 
     if "results" not in data or not data["results"]:
-        return jsonify({"error": "No data found for ticker"}), 404
+        return jsonify({"error": "No intraday data found for ticker"}), 404
 
     candles = data["results"]
 
@@ -48,10 +55,10 @@ def analyze():
     lows = [c["l"] for c in candles]
 
     price = round(closes[-1], 2)
-    open_price = opens[-1]
+    open_price = opens[0]
     change = round(((price - open_price) / open_price) * 100, 2)
 
-    short_ma = mean(closes[-5:])
+    short_ma = mean(closes[-20:]) if len(closes) >= 20 else mean(closes)
     long_ma = mean(closes)
 
     avg_range = mean([(h - l) for h, l in zip(highs, lows)])
@@ -59,7 +66,6 @@ def analyze():
 
     position_in_range = (price - min(lows)) / (max(highs) - min(lows))
 
-    # Signal logic
     if price > short_ma > long_ma and change > 0.5:
         signal = "Bullish"
         confidence = "High"
