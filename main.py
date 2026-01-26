@@ -1,8 +1,10 @@
 from flask import Flask, jsonify
+from flask_cors import CORS
 import yfinance as yf
 import os
 
 app = Flask(__name__)
+CORS(app)  # <-- This is the key line
 
 WATCHLIST = ["BITF", "BTBT", "SGMT", "BNGO", "AMRX", "KSCP"]
 
@@ -56,7 +58,7 @@ def scan():
                 "signal": signal
             })
 
-        except Exception as e:
+        except Exception:
             continue
 
     return jsonify({"results": results})
