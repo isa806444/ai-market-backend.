@@ -1,7 +1,9 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import yfinance as yf
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route("/")
 def home():
@@ -29,9 +31,9 @@ def analyze_ticker(ticker):
         latest = hist.iloc[-1]
         prev = hist.iloc[-2]
 
-        price = round(latest["Close"], 2)
-        change = round(price - prev["Close"], 2)
-        pct = round((change / prev["Close"]) * 100, 2)
+        price = round(float(latest["Close"]), 2)
+        change = round(price - float(prev["Close"]), 2)
+        pct = round((change / float(prev["Close"])) * 100, 2)
 
         if pct > 2:
             signal = "Bullish"
