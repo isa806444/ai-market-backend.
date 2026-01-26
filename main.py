@@ -19,11 +19,6 @@ def ping():
         "message": "pong"
     })
 
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-
 @app.route("/scan")
 def scan():
     return {
@@ -33,3 +28,8 @@ def scan():
             {"ticker": "SGMT", "price": 1.12, "signal": "Breakout"}
         ]
     }
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
