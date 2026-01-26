@@ -10,6 +10,9 @@ CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
+# Simple universe for movers (stocks + crypto miners style names)
+STOCK_MOVERS = ["NVDA", "TSLA", "AMD", "SMCI", "PLTR", "COIN", "MARA", "RIOT", "BITF", "BTBT"]
+
 @app.route("/")
 def home():
     return "AI Market Backend is running!"
@@ -21,9 +24,18 @@ def health():
         "service": "ai-market-backend"
     })
 
+def get_prev(symbol):
+    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_KEY}"
+    r = requests.get(url, timeout=10)
+    d = r.json()
+    if "results" not in d or not d["results"]:
+        return None
+    return d["results"][0]
+
 @app.route("/analyze")
 def analyze():
     symbol = request.args.get("ticker") or request.args.get("symbol")
+    mode = request.args.get("mode", "day")
 
     if not symbol:
         return jsonify({"error": "Missing ticker"}), 400
@@ -42,29 +54,50 @@ def analyze():
 
     r = requests.get(intraday_url, timeout=10)
     data = r.json()
-
     candles = data.get("results")
 
     # Fallback to previous daily candle if intraday is empty
     if not candles:
-        daily_url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_KEY}"
-        r = requests.get(daily_url, timeout=10)
-        data = r.json()
-
-        if "results" not in data or not data["results"]:
+        d = get_prev(symbol)
+        if not d:
             return jsonify({"error": "No market data found for ticker"}), 404
 
-        d = data["results"][0]
         price = round(d["c"], 2)
         open_price = d["o"]
         change = round(((price - open_price) / open_price) * 100, 2)
 
-        signal = "Bullish" if change > 1 else "Weak" if change < -1 else "Neutral"
+        if mode == "day":
+            if change > 1.5:
+                signal = "Momentum Breakout"
+            elif change > 0.5:
+                signal = "Bullish Bias"
+            elif change < -1:
+                signal = "Fade Risk"
+            else:
+                signal = "Chop Zone"
 
-        summary = (
-            f"{symbol} is trading at ${price}. It moved {change}% today. "
-            f"Short-term momentum is {signal.lower()}."
-        )
+            summary = (
+                f"{symbol} is trading at ${price}, change {change}%. "
+                "Day mode favors momentum and volatility. "
+                f"Current state: {signal}. "
+                "Look for expansion and continuation."
+            )
+        else:  # swing (reversal)
+            if change < -3:
+                signal = "Oversold Reversal Watch"
+            elif change < -1:
+                signal = "Pullback Zone"
+            elif change > 3:
+                signal = "Extended – Caution"
+            else:
+                signal = "Base Building"
+
+            summary = (
+                f"{symbol} is trading at ${price}, change {change}%. "
+                "Swing mode looks for exhaustion and turns. "
+                f"Current state: {signal}. "
+                "Watch for stabilization and trend shift."
+            )
 
         return jsonify({
             "ticker": symbol,
@@ -90,25 +123,38 @@ def analyze():
     avg_range = mean([(h - l) for h, l in zip(highs, lows)])
     today_range = highs[-1] - lows[-1]
 
-    if price > short_ma > long_ma and change > 0.5:
-        signal = "Bullish"
-        confidence = "High"
-    elif price < short_ma < long_ma and change < -0.5:
-        signal = "Bearish"
-        confidence = "High"
-    elif today_range > avg_range * 1.5:
-        signal = "Breakout"
-        confidence = "Medium"
-    else:
-        signal = "Neutral"
-        confidence = "Low"
+    if mode == "day":
+        if price > short_ma and today_range > avg_range * 1.2:
+            signal = "Momentum Breakout"
+        elif price > short_ma:
+            signal = "Bullish Bias"
+        elif price < short_ma:
+            signal = "Fade Risk"
+        else:
+            signal = "Chop Zone"
 
-    summary = (
-        f"{symbol} is trading at ${price}. It moved {change}% today. "
-        f"Short-term trend is "
-        f"{'up' if short_ma > long_ma else 'down' if short_ma < long_ma else 'flat'}. "
-        f"Bias: {signal} ({confidence} confidence)."
-    )
+        summary = (
+            f"{symbol} is trading at ${price}, change {change}%. "
+            "Day mode favors speed and momentum. "
+            f"State: {signal}. "
+            "Watch volume and range expansion."
+        )
+    else:  # swing (reversal)
+        if change < -2:
+            signal = "Oversold Reversal Watch"
+        elif change < 0:
+            signal = "Pullback Zone"
+        elif change > 3:
+            signal = "Extended – Caution"
+        else:
+            signal = "Base Building"
+
+        summary = (
+            f"{symbol} is trading at ${price}, change {change}%. "
+            "Swing mode looks for reversals. "
+            f"State: {signal}. "
+            "Watch for basing and trend change."
+        )
 
     return jsonify({
         "ticker": symbol,
@@ -117,6 +163,24 @@ def analyze():
         "signal": signal,
         "summary": summary
     })
+
+@app.route("/movers")
+def movers():
+    results = []
+    for t in STOCK_MOVERS:
+        d = get_prev(t)
+        if d:
+            price = round(d["c"], 2)
+            change = round(((d["c"] - d["o"]) / d["o"]) * 100, 2)
+            results.append({
+                "ticker": t,
+                "price": price,
+                "change": change
+            })
+
+    # sort by absolute move
+    results = sorted(results, key=lambda x: abs(x["change"]), reverse=True)
+    return jsonify(results[:8])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
