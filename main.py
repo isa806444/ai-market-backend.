@@ -43,20 +43,21 @@ def chart():
     tf = request.args.get("tf", "1D")
 
     if not symbol:
-        return jsonify({"error": "Missing ticker"}), 400
+        return jsonify([])
 
     symbol = symbol.upper()
     today = datetime.utcnow()
+    end = today.strftime("%Y-%m-%d")
 
     if tf == "1D":
-        start = today.strftime("%Y-%m-%d")
-        data = polygon_ohlc(symbol, 1, "minute", start, start)
+        start = end
+        data = polygon_ohlc(symbol, 1, "minute", start, end)
     elif tf == "5D":
         start = (today - timedelta(days=5)).strftime("%Y-%m-%d")
-        data = polygon_ohlc(symbol, 5, "minute", start, today.strftime("%Y-%m-%d"))
+        data = polygon_ohlc(symbol, 5, "minute", start, end)
     else:  # 1M
         start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-        data = polygon_ohlc(symbol, 1, "day", start, today.strftime("%Y-%m-%d"))
+        data = polygon_ohlc(symbol, 1, "day", start, end)
 
     candles = []
     for c in data:
