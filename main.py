@@ -62,12 +62,22 @@ def chart():
     today = datetime.utcnow()
     end = today.strftime("%Y-%m-%d")
 
+    data = []
+
     if tf == "1D":
+        # Try today first
         start = end
         data = polygon_ohlc(symbol, 1, "minute", start, end)
+
+        # Fallback to yesterday if no candles (after-hours / pre-market)
+        if not data:
+            y = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+            data = polygon_ohlc(symbol, 1, "minute", y, y)
+
     elif tf == "5D":
         start = (today - timedelta(days=5)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 5, "minute", start, end)
+
     else:  # 1M
         start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 1, "day", start, end)
