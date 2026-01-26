@@ -37,6 +37,19 @@ def get_prev(symbol):
         return None
     return d["results"][0]
 
+def get_last_trade(symbol):
+    try:
+        r = requests.get(
+            f"https://api.polygon.io/v2/last/trade/{symbol}?apiKey={POLYGON_KEY}",
+            timeout=5
+        )
+        d = r.json()
+        if "results" in d and "p" in d["results"]:
+            return round(d["results"]["p"], 2)
+    except:
+        pass
+    return None
+
 @app.route("/chart")
 def chart():
     symbol = request.args.get("ticker")
@@ -85,21 +98,22 @@ def analyze():
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
+    last_trade = get_last_trade(symbol)
 
-    # Fallback to last close if market is closed
+    # After-hours / closed market path
     if not candles:
         d = get_prev(symbol)
-        if not d:
+        if not d and not last_trade:
             return jsonify({"error": "Market data unavailable"}), 503
 
-        price = round(d["c"], 2)
-        open_price = d["o"]
+        price = last_trade or round(d["c"], 2)
+        open_price = d["o"] if d else price
         change = round(((price - open_price) / open_price) * 100, 2)
 
         if mode == "day":
             signal = "Bullish Bias" if change > 0.5 else "Fade Risk" if change < -1 else "Chop Zone"
-            entry = "Wait for open and range break"
-            stop = "Below morning low"
+            entry = "Next session open or range break"
+            stop = "Below session low"
             target = "High of day"
         else:
             signal = "Pullback Zone" if change < 0 else "Base Building"
@@ -108,8 +122,8 @@ def analyze():
             target = "Trend continuation"
 
         summary = (
-            f"{symbol} last closed at ${price} ({change}%). "
-            "Using most recent market data. "
+            f"{symbol} last traded at ${price} ({change}%). "
+            "Using most recent available data (after-hours supported). "
             f"Bias: {signal}. Entry: {entry}. Stop: {stop}. Target: {target}."
         )
 
@@ -124,6 +138,7 @@ def analyze():
             "summary": summary
         })
 
+    # Intraday path
     closes = [c["c"] for c in candles]
     highs = [c["h"] for c in candles]
     lows = [c["l"] for c in candles]
