@@ -1,8 +1,10 @@
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import os
 import requests
 
 app = Flask(__name__)
+CORS(app)  # <-- This fixes the “Failed to load analysis” issue
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
@@ -29,7 +31,7 @@ def analyze():
         return jsonify({"error": "Polygon API key not configured"}), 500
 
     url = f"https://api.polygon.io/v2/aggs/ticker/{symbol.upper()}/prev?apiKey={POLYGON_KEY}"
-    r = requests.get(url)
+    r = requests.get(url, timeout=10)
     data = r.json()
 
     if "results" not in data or not data["results"]:
@@ -39,7 +41,6 @@ def analyze():
 
     price = round(result["c"], 2)
     open_price = result["o"]
-
     change = round(((price - open_price) / open_price) * 100, 2)
 
     if change > 1:
