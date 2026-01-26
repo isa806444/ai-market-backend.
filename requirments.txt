@@ -1,6 +1,1 @@
 flask
-fastapi
-uvicorn
-yfinance
-python-dotenv
-openai
