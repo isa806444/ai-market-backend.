@@ -3,3 +3,6 @@ requests
 websockets
 multitasking
 flask-cors
+yfinance
+pandas
+numpy
