@@ -10,7 +10,7 @@ CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
-# Simple universe for movers (stocks + crypto miners style names)
+# Simple universe for movers (stocks + crypto-style tickers)
 STOCK_MOVERS = ["NVDA", "TSLA", "AMD", "SMCI", "PLTR", "COIN", "MARA", "RIOT", "BITF", "BTBT"]
 
 @app.route("/")
@@ -61,61 +61,55 @@ def analyze():
     except:
         candles = None
 
-    # Fallback to previous daily candle
+    # Fallback to previous daily candle (ALWAYS return real price)
     if not candles:
         d = get_prev(symbol)
-        if d:
-            price = round(d["c"], 2)
-            open_price = d["o"]
-            change = round(((price - open_price) / open_price) * 100, 2)
+        if not d:
+            return jsonify({"error": "Market data unavailable"}), 503
 
-            if mode == "day":
-                if change > 1.5:
-                    signal = "Momentum Breakout"
-                elif change > 0.5:
-                    signal = "Bullish Bias"
-                elif change < -1:
-                    signal = "Fade Risk"
-                else:
-                    signal = "Chop Zone"
+        price = round(d["c"], 2)
+        open_price = d["o"]
+        change = round(((price - open_price) / open_price) * 100, 2)
 
-                summary = (
-                    f"{symbol} is trading at ${price}, change {change}%. "
-                    "Day mode favors momentum and volatility. "
-                    f"Current state: {signal}. "
-                    "Look for expansion and continuation."
-                )
+        if mode == "day":
+            if change > 1.5:
+                signal = "Momentum Breakout"
+            elif change > 0.5:
+                signal = "Bullish Bias"
+            elif change < -1:
+                signal = "Fade Risk"
             else:
-                if change < -3:
-                    signal = "Oversold Reversal Watch"
-                elif change < -1:
-                    signal = "Pullback Zone"
-                elif change > 3:
-                    signal = "Extended – Caution"
-                else:
-                    signal = "Base Building"
+                signal = "Chop Zone"
 
-                summary = (
-                    f"{symbol} is trading at ${price}, change {change}%. "
-                    "Swing mode looks for exhaustion and turns. "
-                    f"Current state: {signal}. "
-                    "Watch for stabilization and trend shift."
-                )
+            summary = (
+                f"{symbol} last closed at ${price}. Change {change}%. "
+                "Using most recent market data. "
+                f"Day state: {signal}. "
+                "Watch for continuation or expansion."
+            )
+        else:
+            if change < -3:
+                signal = "Oversold Reversal Watch"
+            elif change < -1:
+                signal = "Pullback Zone"
+            elif change > 3:
+                signal = "Extended – Caution"
+            else:
+                signal = "Base Building"
 
-            return jsonify({
-                "ticker": symbol,
-                "price": price,
-                "change": change,
-                "signal": signal,
-                "summary": summary
-            })
+            summary = (
+                f"{symbol} last closed at ${price}. Change {change}%. "
+                "Using most recent market data. "
+                f"Swing state: {signal}. "
+                "Watch for basing and reversal."
+            )
 
         return jsonify({
             "ticker": symbol,
-            "price": "—",
-            "change": 0,
-            "signal": "Neutral",
-            "summary": f"Live data is temporarily unavailable for {symbol}. Try again shortly."
+            "price": price,
+            "change": change,
+            "signal": signal,
+            "summary": summary
         })
 
     # Intraday path
