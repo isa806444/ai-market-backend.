@@ -1,9 +1,8 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import os
-import requests
+import os, requests
 from statistics import mean
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 CORS(app)
@@ -19,10 +18,16 @@ def home():
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "ok",
-        "service": "ai-market-backend"
-    })
+    return jsonify({"status": "ok", "service": "ai-market-backend"})
+
+def polygon_ohlc(symbol, multiplier, timespan, start, end):
+    url = (
+        f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/"
+        f"{multiplier}/{timespan}/{start}/{end}"
+        f"?adjusted=true&sort=asc&limit=5000&apiKey={POLYGON_KEY}"
+    )
+    r = requests.get(url, timeout=10)
+    return r.json().get("results", [])
 
 def get_prev(symbol):
     url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_KEY}"
@@ -32,6 +37,39 @@ def get_prev(symbol):
         return None
     return d["results"][0]
 
+@app.route("/chart")
+def chart():
+    symbol = request.args.get("ticker")
+    tf = request.args.get("tf", "1D")
+
+    if not symbol:
+        return jsonify({"error": "Missing ticker"}), 400
+
+    symbol = symbol.upper()
+    today = datetime.utcnow()
+
+    if tf == "1D":
+        start = today.strftime("%Y-%m-%d")
+        data = polygon_ohlc(symbol, 1, "minute", start, start)
+    elif tf == "5D":
+        start = (today - timedelta(days=5)).strftime("%Y-%m-%d")
+        data = polygon_ohlc(symbol, 5, "minute", start, today.strftime("%Y-%m-%d"))
+    else:  # 1M
+        start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        data = polygon_ohlc(symbol, 1, "day", start, today.strftime("%Y-%m-%d"))
+
+    candles = []
+    for c in data:
+        candles.append({
+            "time": int(c["t"] / 1000),
+            "open": c["o"],
+            "high": c["h"],
+            "low": c["l"],
+            "close": c["c"]
+        })
+
+    return jsonify(candles)
+
 @app.route("/analyze")
 def analyze():
     symbol = request.args.get("ticker") or request.args.get("symbol")
@@ -39,29 +77,15 @@ def analyze():
 
     if not symbol:
         return jsonify({"error": "Missing ticker"}), 400
-
     if not POLYGON_KEY:
         return jsonify({"error": "Polygon API key not configured"}), 500
 
     symbol = symbol.upper()
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
-    candles = None
+    candles = polygon_ohlc(symbol, 1, "minute", today, today)
 
-    # Try intraday first
-    intraday_url = (
-        f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/minute/"
-        f"{today}/{today}?adjusted=true&sort=asc&limit=5000&apiKey={POLYGON_KEY}"
-    )
-
-    try:
-        r = requests.get(intraday_url, timeout=10)
-        data = r.json()
-        candles = data.get("results")
-    except:
-        candles = None
-
-    # Fallback to previous daily candle (ALWAYS return real price)
+    # Fallback to last close if market is closed
     if not candles:
         d = get_prev(symbol)
         if not d:
@@ -72,100 +96,91 @@ def analyze():
         change = round(((price - open_price) / open_price) * 100, 2)
 
         if mode == "day":
-            if change > 1.5:
-                signal = "Momentum Breakout"
-            elif change > 0.5:
-                signal = "Bullish Bias"
-            elif change < -1:
-                signal = "Fade Risk"
-            else:
-                signal = "Chop Zone"
-
-            summary = (
-                f"{symbol} last closed at ${price}. Change {change}%. "
-                "Using most recent market data. "
-                f"Day state: {signal}. "
-                "Watch for continuation or expansion."
-            )
+            signal = "Bullish Bias" if change > 0.5 else "Fade Risk" if change < -1 else "Chop Zone"
+            entry = "Wait for open and range break"
+            stop = "Below morning low"
+            target = "High of day"
         else:
-            if change < -3:
-                signal = "Oversold Reversal Watch"
-            elif change < -1:
-                signal = "Pullback Zone"
-            elif change > 3:
-                signal = "Extended – Caution"
-            else:
-                signal = "Base Building"
+            signal = "Pullback Zone" if change < 0 else "Base Building"
+            entry = "Near support"
+            stop = "Below base"
+            target = "Trend continuation"
 
-            summary = (
-                f"{symbol} last closed at ${price}. Change {change}%. "
-                "Using most recent market data. "
-                f"Swing state: {signal}. "
-                "Watch for basing and reversal."
-            )
+        summary = (
+            f"{symbol} last closed at ${price} ({change}%). "
+            "Using most recent market data. "
+            f"Bias: {signal}. Entry: {entry}. Stop: {stop}. Target: {target}."
+        )
 
         return jsonify({
             "ticker": symbol,
             "price": price,
             "change": change,
             "signal": signal,
+            "entry": entry,
+            "stop": stop,
+            "target": target,
             "summary": summary
         })
 
-    # Intraday path
     closes = [c["c"] for c in candles]
-    opens = [c["o"] for c in candles]
     highs = [c["h"] for c in candles]
     lows = [c["l"] for c in candles]
 
     price = round(closes[-1], 2)
-    open_price = opens[0]
+    open_price = candles[0]["o"]
     change = round(((price - open_price) / open_price) * 100, 2)
 
-    short_ma = mean(closes[-20:]) if len(closes) >= 20 else mean(closes)
-    long_ma = mean(closes)
-
-    avg_range = mean([(h - l) for h, l in zip(highs, lows)])
-    today_range = highs[-1] - lows[-1]
+    ema9 = mean(closes[-9:])
+    ema21 = mean(closes[-21:]) if len(closes) >= 21 else mean(closes)
+    ema50 = mean(closes[-50:]) if len(closes) >= 50 else mean(closes)
 
     if mode == "day":
-        if price > short_ma and today_range > avg_range * 1.2:
-            signal = "Momentum Breakout"
-        elif price > short_ma:
-            signal = "Bullish Bias"
-        elif price < short_ma:
-            signal = "Fade Risk"
+        if price > ema9 > ema21:
+            signal = "Bullish Momentum"
+            entry = f"Pullback near EMA9 ({round(ema9,2)})"
+            stop = f"Below EMA21 ({round(ema21,2)})"
+            target = f"High of day near {round(max(highs),2)}"
+        elif price < ema9:
+            signal = "Weak / Fade"
+            entry = f"Rejection near EMA9 ({round(ema9,2)})"
+            stop = f"Above EMA21 ({round(ema21,2)})"
+            target = f"Lows near {round(min(lows),2)}"
         else:
-            signal = "Chop Zone"
-
-        summary = (
-            f"{symbol} is trading at ${price}, change {change}%. "
-            "Day mode favors speed and momentum. "
-            f"State: {signal}. "
-            "Watch volume and range expansion."
-        )
+            signal = "Chop"
+            entry = "Wait for range break"
+            stop = "Tight"
+            target = "Scalp only"
     else:
-        if change < -2:
-            signal = "Oversold Reversal Watch"
-        elif change < 0:
-            signal = "Pullback Zone"
-        elif change > 3:
-            signal = "Extended – Caution"
+        if price > ema21 > ema50:
+            signal = "Uptrend Pullback"
+            entry = f"Near EMA21 ({round(ema21,2)})"
+            stop = f"Below EMA50 ({round(ema50,2)})"
+            target = "Prior swing high"
+        elif price < ema50:
+            signal = "Downtrend / Avoid"
+            entry = "Wait for base"
+            stop = "N/A"
+            target = "N/A"
         else:
-            signal = "Base Building"
+            signal = "Base Forming"
+            entry = "Break above range"
+            stop = "Below base"
+            target = "Trend continuation"
 
-        summary = (
-            f"{symbol} is trading at ${price}, change {change}%. "
-            "Swing mode looks for reversals. "
-            f"State: {signal}. "
-            "Watch for basing and trend change."
-        )
+    summary = (
+        f"{symbol} is trading at ${price} ({change}%). "
+        f"Bias: {signal}. Entry: {entry}. Stop: {stop}. Target: {target}."
+    )
 
     return jsonify({
         "ticker": symbol,
         "price": price,
         "change": change,
         "signal": signal,
+        "entry": entry,
+        "stop": stop,
+        "target": target,
         "summary": summary
     })
 
@@ -177,11 +192,7 @@ def movers():
         if d:
             price = round(d["c"], 2)
             change = round(((d["c"] - d["o"]) / d["o"]) * 100, 2)
-            results.append({
-                "ticker": t,
-                "price": price,
-                "change": change
-            })
+            results.append({"ticker": t, "price": price, "change": change})
 
     results = sorted(results, key=lambda x: abs(x["change"]), reverse=True)
     return jsonify(results[:8])
