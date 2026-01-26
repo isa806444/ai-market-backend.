@@ -32,23 +32,49 @@ def analyze():
         return jsonify({"error": "Polygon API key not configured"}), 500
 
     symbol = symbol.upper()
-
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # Pull today's 1-minute candles so we get the *current* price
-    url = (
+    # Try intraday first (market hours)
+    intraday_url = (
         f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/1/minute/"
         f"{today}/{today}?adjusted=true&sort=asc&limit=5000&apiKey={POLYGON_KEY}"
     )
 
-    r = requests.get(url, timeout=10)
+    r = requests.get(intraday_url, timeout=10)
     data = r.json()
 
-    if "results" not in data or not data["results"]:
-        return jsonify({"error": "No intraday data found for ticker"}), 404
+    candles = data.get("results")
 
-    candles = data["results"]
+    # Fallback to previous daily candle if intraday is empty
+    if not candles:
+        daily_url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_KEY}"
+        r = requests.get(daily_url, timeout=10)
+        data = r.json()
 
+        if "results" not in data or not data["results"]:
+            return jsonify({"error": "No market data found for ticker"}), 404
+
+        d = data["results"][0]
+        price = round(d["c"], 2)
+        open_price = d["o"]
+        change = round(((price - open_price) / open_price) * 100, 2)
+
+        signal = "Bullish" if change > 1 else "Weak" if change < -1 else "Neutral"
+
+        summary = (
+            f"{symbol} is trading at ${price}. It moved {change}% today. "
+            f"Short-term momentum is {signal.lower()}."
+        )
+
+        return jsonify({
+            "ticker": symbol,
+            "price": price,
+            "change": change,
+            "signal": signal,
+            "summary": summary
+        })
+
+    # Intraday path (market open)
     closes = [c["c"] for c in candles]
     opens = [c["o"] for c in candles]
     highs = [c["h"] for c in candles]
@@ -64,8 +90,6 @@ def analyze():
     avg_range = mean([(h - l) for h, l in zip(highs, lows)])
     today_range = highs[-1] - lows[-1]
 
-    position_in_range = (price - min(lows)) / (max(highs) - min(lows))
-
     if price > short_ma > long_ma and change > 0.5:
         signal = "Bullish"
         confidence = "High"
@@ -79,18 +103,10 @@ def analyze():
         signal = "Neutral"
         confidence = "Low"
 
-    if position_in_range > 0.8:
-        range_note = "near recent highs"
-    elif position_in_range < 0.2:
-        range_note = "near recent lows"
-    else:
-        range_note = "mid-range"
-
     summary = (
         f"{symbol} is trading at ${price}. It moved {change}% today. "
-        f"Price is {range_note}. Short-term trend is "
+        f"Short-term trend is "
         f"{'up' if short_ma > long_ma else 'down' if short_ma < long_ma else 'flat'}. "
-        f"Volatility is {'expanding' if today_range > avg_range else 'normal'}. "
         f"Bias: {signal} ({confidence} confidence)."
     )
 
