@@ -65,11 +65,8 @@ def chart():
     data = []
 
     if tf == "1D":
-        # Try today first
         start = end
         data = polygon_ohlc(symbol, 1, "minute", start, end)
-
-        # Fallback to yesterday if no candles (after-hours / pre-market)
         if not data:
             y = (today - timedelta(days=1)).strftime("%Y-%m-%d")
             data = polygon_ohlc(symbol, 1, "minute", y, y)
@@ -110,7 +107,7 @@ def analyze():
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
 
-    # After-hours / closed market path
+    # AFTER-HOURS / CLOSED MARKET
     if not candles:
         d = get_prev(symbol)
         if not d and not last_trade:
@@ -120,35 +117,51 @@ def analyze():
         open_price = d["o"] if d else price
         change = round(((price - open_price) / open_price) * 100, 2)
 
-        if mode == "day":
-            signal = "Bullish Bias" if change > 0.5 else "Fade Risk" if change < -1 else "Chop Zone"
-            entry = "Next session open or range break"
-            stop = "Below session low"
-            target = "High of day"
-        else:
-            signal = "Pullback Zone" if change < 0 else "Base Building"
-            entry = "Near support"
-            stop = "Below base"
-            target = "Trend continuation"
+        bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
+        trend = "Sideways (after-hours)"
+
+        support = round(price * 0.99, 2)
+        resistance = round(price * 1.01, 2)
+
+        plan_entry = f"{round(price * 1.003, 2)} – break above current range"
+        plan_stop = f"{support} – below session support"
+        targets = [
+            f"{round(resistance, 2)} (near resistance)",
+            f"{round(resistance * 1.02, 2)} (extension)"
+        ]
+
+        risk_notes = [
+            "After-hours liquidity is thin",
+            "Expect wider spreads at open",
+            "Wait for volume confirmation"
+        ]
 
         summary = (
             f"{symbol} last traded at ${price} ({change}%). "
-            "Using most recent available data (after-hours supported). "
-            f"Bias: {signal}. Entry: {entry}. Stop: {stop}. Target: {target}."
+            "Market is currently closed; using most recent data. "
+            f"Bias is {bias} with a {trend.lower()} structure."
         )
 
         return jsonify({
             "ticker": symbol,
             "price": price,
             "change": change,
-            "signal": signal,
-            "entry": entry,
-            "stop": stop,
-            "target": target,
+            "bias": bias,
+            "trend": trend,
+            "levels": {
+                "support": str(support),
+                "resistance": str(resistance)
+            },
+            "plan": {
+                "entry": plan_entry,
+                "stop": plan_stop,
+                "targets": targets
+            },
+            "risk_notes": risk_notes,
             "summary": summary
         })
 
-    # Intraday path
+    # INTRADAY PATH
     closes = [c["c"] for c in candles]
     highs = [c["h"] for c in candles]
     lows = [c["l"] for c in candles]
@@ -159,54 +172,48 @@ def analyze():
 
     ema9 = mean(closes[-9:])
     ema21 = mean(closes[-21:]) if len(closes) >= 21 else mean(closes)
-    ema50 = mean(closes[-50:]) if len(closes) >= 50 else mean(closes)
 
-    if mode == "day":
-        if price > ema9 > ema21:
-            signal = "Bullish Momentum"
-            entry = f"Pullback near EMA9 ({round(ema9,2)})"
-            stop = f"Below EMA21 ({round(ema21,2)})"
-            target = f"High of day near {round(max(highs),2)}"
-        elif price < ema9:
-            signal = "Weak / Fade"
-            entry = f"Rejection near EMA9 ({round(ema9,2)})"
-            stop = f"Above EMA21 ({round(ema21,2)})"
-            target = f"Lows near {round(min(lows),2)}"
-        else:
-            signal = "Chop"
-            entry = "Wait for range break"
-            stop = "Tight"
-            target = "Scalp only"
-    else:
-        if price > ema21 > ema50:
-            signal = "Uptrend Pullback"
-            entry = f"Near EMA21 ({round(ema21,2)})"
-            stop = f"Below EMA50 ({round(ema50,2)})"
-            target = "Prior swing high"
-        elif price < ema50:
-            signal = "Downtrend / Avoid"
-            entry = "Wait for base"
-            stop = "N/A"
-            target = "N/A"
-        else:
-            signal = "Base Forming"
-            entry = "Break above range"
-            stop = "Below base"
-            target = "Trend continuation"
+    bias = "Bullish" if price > ema21 else "Bearish" if price < ema21 else "Neutral"
+    trend = "Upward (short-term)" if ema9 > ema21 else "Downward (short-term)"
+
+    support = round(ema21, 2)
+    resistance = round(max(highs), 2)
+
+    plan_entry = f"{round(price * 1.003, 2)} – break above current range"
+    plan_stop = f"{round(ema21 * 0.995, 2)} – below trend support"
+    targets = [
+        f"{round(resistance, 2)} (range high)",
+        f"{round(resistance * 1.02, 2)} (extension)"
+    ]
+
+    risk_notes = [
+        "Watch volume for confirmation",
+        "Be cautious near resistance",
+        "Move stop to breakeven on strength"
+    ]
 
     summary = (
         f"{symbol} is trading at ${price} ({change}%). "
-        f"Bias: {signal}. Entry: {entry}. Stop: {stop}. Target: {target}."
+        f"Structure remains {bias.lower()} with {trend.lower()} momentum. "
+        f"Holding above {support} favors continuation."
     )
 
     return jsonify({
         "ticker": symbol,
         "price": price,
         "change": change,
-        "signal": signal,
-        "entry": entry,
-        "stop": stop,
-        "target": target,
+        "bias": bias,
+        "trend": trend,
+        "levels": {
+            "support": str(support),
+            "resistance": str(resistance)
+        },
+        "plan": {
+            "entry": plan_entry,
+            "stop": plan_stop,
+            "targets": targets
+        },
+        "risk_notes": risk_notes,
         "summary": summary
     })
 
