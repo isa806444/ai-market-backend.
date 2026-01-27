@@ -54,6 +54,19 @@ def get_last_trade(symbol):
         pass
     return None
 
+    # 🔴 NEW: lightweight live tick endpoint
+@app.route("/last-trade")
+def last_trade_route():
+    sym = request.args.get("ticker", "").upper()
+    if not sym:
+        return jsonify({"error": "Missing ticker"}), 400
+
+    p = get_last_trade(sym)
+    return jsonify({
+        "ticker": sym,
+        "price": p
+    })
+
 @app.route("/chart")
 def chart():
     symbol = request.args.get("ticker")
