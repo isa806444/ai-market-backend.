@@ -110,8 +110,30 @@ def analyze():
     # AFTER-HOURS / CLOSED MARKET
     if not candles:
         d = get_prev(symbol)
+
+        # OPTION B: Graceful fallback – never 503
         if not d and not last_trade:
-            return jsonify({"error": "Market data unavailable"}), 503
+            return jsonify({
+                "ticker": symbol,
+                "price": "—",
+                "bias": "Unavailable",
+                "trend": "No live feed",
+                "levels": {
+                    "support": "—",
+                    "resistance": "—"
+                },
+                "plan": {
+                    "entry": "Wait for data",
+                    "stop": "N/A",
+                    "targets": []
+                },
+                "risk_notes": [
+                    "No market data returned from provider.",
+                    "This can occur after-hours or during API outages.",
+                    "Try again in a moment."
+                ],
+                "summary": f"{symbol} data is temporarily unavailable. This is usually caused by after-hours gaps or API limits."
+            })
 
         price = last_trade or round(d["c"], 2)
         open_price = d["o"] if d else price
