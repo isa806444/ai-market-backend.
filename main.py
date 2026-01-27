@@ -87,22 +87,22 @@ def chart():
 
     return jsonify(candles)
 
-def trader_reasoning(bias, trend, support, resistance):
+def trader_reasoning(bias, support, resistance):
     if bias == "Bullish":
         return (
-            f"Price is holding above key support near {support}, keeping buyers in control. "
+            f"Price is holding above key demand near {support}, keeping buyers in control. "
             f"Momentum favors continuation toward {resistance}, but strength must be confirmed by volume. "
-            "Failure to hold trend support would invalidate the setup."
+            "A failure to hold trend support invalidates the setup."
         )
     if bias == "Bearish":
         return (
-            f"Price remains capped beneath resistance near {resistance}, signaling supply overhead. "
+            f"Price remains capped beneath resistance near {resistance}, signaling overhead supply. "
             f"Rallies without volume are likely to fade back toward {support}. "
-            "Only a clean reclaim of resistance would shift control."
+            "Only a clean reclaim of resistance shifts control."
         )
     return (
-        "Price is compressing inside a narrow range, reflecting balance between buyers and sellers. "
-        "Without expansion in volume, directional attempts are prone to failure. "
+        "Price is compressing inside a tight range, reflecting balance between buyers and sellers. "
+        "Without volume expansion, directional attempts are prone to failure. "
         "Wait for a decisive break before committing risk."
     )
 
@@ -120,14 +120,15 @@ def analyze():
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
 
-    # Provider outage – fall back to cached snapshot
+    # Provider outage → return cached snapshot instead of 503
     if not candles and not last_trade:
         if symbol in LAST_SNAPSHOT:
             cached = LAST_SNAPSHOT[symbol].copy()
             cached["summary"] += (
                 " Live market data is temporarily unavailable. "
-                "This analysis is based on the most recent confirmed market structure for "
-                f"{symbol} and remains valid for strategic planning. Await fresh volume before acting."
+                "This analysis is based on the most recent confirmed market structure "
+                f"for {symbol} and remains valid for strategic planning. "
+                "Await fresh volume before acting."
             )
             return jsonify(cached)
 
@@ -143,8 +144,13 @@ def analyze():
                 "This can occur after-hours or during API outages.",
                 "Try again shortly."
             ],
-            "summary": f"{symbol} data is temporarily unavailable.",
-            "reasoning": "Market structure cannot be evaluated without confirmed price data."
+            "summary": (
+                "Live market data is temporarily unavailable. "
+                "This analysis is based on the most recent confirmed market structure "
+                f"for {symbol} and remains valid for strategic planning. "
+                "Await fresh volume before acting."
+            ),
+            "reasoning": "Market structure cannot be evaluated without confirmed price flow."
         })
 
     # AFTER-HOURS
@@ -184,7 +190,7 @@ def analyze():
                 f"{symbol} last traded at ${price} ({change}%). "
                 "Market is currently closed; using most recent confirmed data."
             ),
-            "reasoning": trader_reasoning(bias, trend, support, resistance)
+            "reasoning": trader_reasoning(bias, support, resistance)
         }
 
         LAST_SNAPSHOT[symbol] = payload
@@ -231,7 +237,7 @@ def analyze():
             f"{symbol} is trading at ${price} ({change}%). "
             f"Structure remains {bias.lower()} with {trend.lower()} momentum."
         ),
-        "reasoning": trader_reasoning(bias, trend, support, resistance)
+        "reasoning": trader_reasoning(bias, support, resistance)
     }
 
     LAST_SNAPSHOT[symbol] = payload
