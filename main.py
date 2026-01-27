@@ -150,7 +150,6 @@ def analyze():
             "reasoning": "Market structure cannot be evaluated without confirmed price flow."
         })
 
-    # AFTER-HOURS
     if not candles:
         d = get_prev(symbol)
         price = last_trade or round(d["c"], 2)
@@ -193,7 +192,6 @@ def analyze():
         LAST_SNAPSHOT[symbol] = payload
         return jsonify(payload)
 
-    # INTRADAY
     closes = [c["c"] for c in candles]
     highs = [c["h"] for c in candles]
 
@@ -245,34 +243,41 @@ def movers():
     if not POLYGON_KEY:
         return jsonify([])
 
-    today = datetime.utcnow()
-    while today.weekday() >= 5:
-        today -= timedelta(days=1)
-
-    day = today.strftime("%Y-%m-%d")
-
     try:
-        url = (
-            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
-            f"?adjusted=true&apiKey={POLYGON_KEY}"
-        )
-        r = requests.get(url, timeout=15)
-        data = r.json().get("results", [])
+        check_day = datetime.utcnow()
 
-        movers = []
-        for d in data:
-            o = d.get("o", 0)
-            c = d.get("c", 0)
-            if o and c:
-                change = round(((c - o) / o) * 100, 2)
-                movers.append({
-                    "ticker": d["T"],
-                    "price": round(c, 2),
-                    "change": change
-                })
+        for _ in range(7):  # walk back up to 1 week
+            if check_day.weekday() >= 5:
+                check_day -= timedelta(days=1)
+                continue
 
-        movers = sorted(movers, key=lambda x: abs(x["change"]), reverse=True)
-        return jsonify(movers[:5])
+            day = check_day.strftime("%Y-%m-%d")
+            url = (
+                f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
+                f"?adjusted=true&apiKey={POLYGON_KEY}"
+            )
+            r = requests.get(url, timeout=15)
+            data = r.json().get("results", [])
+
+            if data:
+                movers = []
+                for d in data:
+                    o = d.get("o", 0)
+                    c = d.get("c", 0)
+                    if o and c:
+                        change = round(((c - o) / o) * 100, 2)
+                        movers.append({
+                            "ticker": d["T"],
+                            "price": round(c, 2),
+                            "change": change
+                        })
+
+                movers = sorted(movers, key=lambda x: abs(x["change"]), reverse=True)
+                return jsonify(movers[:5])
+
+            check_day -= timedelta(days=1)
+
+        return jsonify([])
 
     except Exception as e:
         print("Movers error:", e)
