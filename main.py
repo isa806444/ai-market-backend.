@@ -9,8 +9,6 @@ CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
-STOCK_MOVERS = ["NVDA", "TSLA", "AMD", "SMCI", "PLTR", "COIN", "MARA", "RIOT", "BITF", "BTBT"]
-
 # Cache last successful analysis per ticker
 LAST_SNAPSHOT = {}
 
@@ -120,7 +118,6 @@ def analyze():
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
 
-    # Provider outage → return cached snapshot instead of 503
     if not candles and not last_trade:
         if symbol in LAST_SNAPSHOT:
             cached = LAST_SNAPSHOT[symbol].copy()
@@ -245,16 +242,41 @@ def analyze():
 
 @app.route("/movers")
 def movers():
-    results = []
-    for t in STOCK_MOVERS:
-        d = get_prev(t)
-        if d:
-            price = round(d["c"], 2)
-            change = round(((d["c"] - d["o"]) / d["o"]) * 100, 2)
-            results.append({"ticker": t, "price": price, "change": change})
+    if not POLYGON_KEY:
+        return jsonify([])
 
-    results = sorted(results, key=lambda x: abs(x["change"]), reverse=True)
-    return jsonify(results[:8])
+    today = datetime.utcnow()
+    while today.weekday() >= 5:
+        today -= timedelta(days=1)
+
+    day = today.strftime("%Y-%m-%d")
+
+    try:
+        url = (
+            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
+            f"?adjusted=true&apiKey={POLYGON_KEY}"
+        )
+        r = requests.get(url, timeout=15)
+        data = r.json().get("results", [])
+
+        movers = []
+        for d in data:
+            o = d.get("o", 0)
+            c = d.get("c", 0)
+            if o and c:
+                change = round(((c - o) / o) * 100, 2)
+                movers.append({
+                    "ticker": d["T"],
+                    "price": round(c, 2),
+                    "change": change
+                })
+
+        movers = sorted(movers, key=lambda x: abs(x["change"]), reverse=True)
+        return jsonify(movers[:5])
+
+    except Exception as e:
+        print("Movers error:", e)
+        return jsonify([])
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
