@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os, requests
 from statistics import mean
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
 CORS(app)
@@ -19,6 +20,9 @@ def home():
 @app.route("/health")
 def health():
     return jsonify({"status": "ok", "service": "ai-market-backend"})
+
+def market_now():
+    return datetime.now(ZoneInfo("America/New_York"))
 
 def polygon_ohlc(symbol, multiplier, timespan, start, end):
     url = (
@@ -59,20 +63,20 @@ def chart():
         return jsonify([])
 
     symbol = symbol.upper()
-    today = datetime.utcnow()
-    end = today.strftime("%Y-%m-%d")
+    now = market_now()
+    end = now.strftime("%Y-%m-%d")
 
     if tf == "1D":
         start = end
         data = polygon_ohlc(symbol, 1, "minute", start, end)
         if not data:
-            y = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+            y = (now - timedelta(days=1)).strftime("%Y-%m-%d")
             data = polygon_ohlc(symbol, 1, "minute", y, y)
     elif tf == "5D":
-        start = (today - timedelta(days=5)).strftime("%Y-%m-%d")
+        start = (now - timedelta(days=5)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 5, "minute", start, end)
     else:
-        start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 1, "day", start, end)
 
     candles = [{
@@ -113,7 +117,8 @@ def analyze():
         return jsonify({"error": "Polygon API key not configured"}), 500
 
     symbol = symbol.upper()
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    now = market_now()
+    today = now.strftime("%Y-%m-%d")
 
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
@@ -288,7 +293,7 @@ def movers():
         return jsonify([])
 
     try:
-        check_day = datetime.utcnow()
+        check_day = market_now()
 
         for _ in range(7):
             if check_day.weekday() >= 5:
