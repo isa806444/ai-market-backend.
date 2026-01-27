@@ -118,7 +118,51 @@ def analyze():
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
 
+    # No intraday + no last trade → try previous session
     if not candles and not last_trade:
+        d = get_prev(symbol)
+
+        if d:
+            price = round(d["c"], 2)
+            open_price = d["o"]
+            change = round(((price - open_price) / open_price) * 100, 2)
+
+            bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
+            trend = "Sideways (after-hours)"
+
+            support = round(price * 0.99, 2)
+            resistance = round(price * 1.01, 2)
+
+            payload = {
+                "ticker": symbol,
+                "price": price,
+                "change": change,
+                "bias": bias,
+                "trend": trend,
+                "levels": {"support": str(support), "resistance": str(resistance)},
+                "plan": {
+                    "entry": f"{round(price * 1.003, 2)} – break above range",
+                    "stop": f"{support} – below support",
+                    "targets": [
+                        f"{resistance} (near resistance)",
+                        f"{round(resistance * 1.02, 2)} (extension)"
+                    ]
+                },
+                "risk_notes": [
+                    "After-hours liquidity is thin",
+                    "Expect wider spreads at open",
+                    "Wait for volume confirmation"
+                ],
+                "summary": (
+                    f"{symbol} last closed at ${price} ({change}%). "
+                    "Live data is offline; structure is based on the most recent confirmed session."
+                ),
+                "reasoning": trader_reasoning(bias, support, resistance)
+            }
+
+            LAST_SNAPSHOT[symbol] = payload
+            return jsonify(payload)
+
         if symbol in LAST_SNAPSHOT:
             cached = LAST_SNAPSHOT[symbol].copy()
             cached["summary"] += (
@@ -143,13 +187,12 @@ def analyze():
             ],
             "summary": (
                 "Live market data is temporarily unavailable. "
-                "This analysis is based on the most recent confirmed market structure "
-                f"for {symbol} and remains valid for strategic planning. "
-                "Await fresh volume before acting."
+                f"{symbol} has no confirmed session data yet."
             ),
             "reasoning": "Market structure cannot be evaluated without confirmed price flow."
         })
 
+    # AFTER-HOURS WITH LAST TRADE
     if not candles:
         d = get_prev(symbol)
         price = last_trade or round(d["c"], 2)
@@ -192,6 +235,7 @@ def analyze():
         LAST_SNAPSHOT[symbol] = payload
         return jsonify(payload)
 
+    # INTRADAY PATH
     closes = [c["c"] for c in candles]
     highs = [c["h"] for c in candles]
 
@@ -246,7 +290,7 @@ def movers():
     try:
         check_day = datetime.utcnow()
 
-        for _ in range(7):  # walk back up to 1 week
+        for _ in range(7):
             if check_day.weekday() >= 5:
                 check_day -= timedelta(days=1)
                 continue
