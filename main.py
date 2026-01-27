@@ -24,15 +24,6 @@ def health():
 def market_now():
     return datetime.now(ZoneInfo("America/New_York"))
 
-def polygon_ohlc(symbol, multiplier, timespan, start, end):
-    url = (
-        f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/"
-        f"{multiplier}/{timespan}/{start}/{end}"
-        f"?adjusted=true&sort=asc&limit=5000&apiKey={POLYGON_KEY}"
-    )
-    r = requests.get(url, timeout=10)
-    return r.json().get("results", [])
-
 def get_prev(symbol):
     url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_KEY}"
     r = requests.get(url, timeout=10)
@@ -53,54 +44,6 @@ def get_last_trade(symbol):
     except:
         pass
     return None
-
-    # 🔴 NEW: lightweight live tick endpoint
-@app.route("/last-trade")
-def last_trade_route():
-    sym = request.args.get("ticker", "").upper()
-    if not sym:
-        return jsonify({"error": "Missing ticker"}), 400
-
-    p = get_last_trade(sym)
-    return jsonify({
-        "ticker": sym,
-        "price": p
-    })
-
-@app.route("/chart")
-def chart():
-    symbol = request.args.get("ticker")
-    tf = request.args.get("tf", "1D")
-
-    if not symbol:
-        return jsonify([])
-
-    symbol = symbol.upper()
-    now = market_now()
-    end = now.strftime("%Y-%m-%d")
-
-    if tf == "1D":
-        start = end
-        data = polygon_ohlc(symbol, 1, "minute", start, end)
-        if not data:
-            y = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-            data = polygon_ohlc(symbol, 1, "minute", y, y)
-    elif tf == "5D":
-        start = (now - timedelta(days=5)).strftime("%Y-%m-%d")
-        data = polygon_ohlc(symbol, 5, "minute", start, end)
-    else:
-        start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        data = polygon_ohlc(symbol, 1, "day", start, end)
-
-    candles = [{
-        "time": int(c["t"] / 1000),
-        "open": c["o"],
-        "high": c["h"],
-        "low": c["l"],
-        "close": c["c"]
-    } for c in data]
-
-    return jsonify(candles)
 
 def trader_reasoning(bias, support, resistance):
     if bias == "Bullish":
@@ -130,145 +73,67 @@ def analyze():
         return jsonify({"error": "Polygon API key not configured"}), 500
 
     symbol = symbol.upper()
-    now = market_now()
-    today = now.strftime("%Y-%m-%d")
 
-    candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
+    d = get_prev(symbol)
 
-    # No intraday + no last trade → try previous session
-    if not candles and not last_trade:
-        d = get_prev(symbol)
-
-        if d:
-            price = round(d["c"], 2)
-            open_price = d["o"]
-            change = round(((price - open_price) / open_price) * 100, 2)
-
-            bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
-            trend = "Sideways (after-hours)"
-
-            support = round(price * 0.99, 2)
-            resistance = round(price * 1.01, 2)
-
-            payload = {
-                "ticker": symbol,
-                "price": price,
-                "change": change,
-                "bias": bias,
-                "trend": trend,
-                "levels": {"support": str(support), "resistance": str(resistance)},
-                "plan": {
-                    "entry": f"{round(price * 1.003, 2)} – break above range",
-                    "stop": f"{support} – below support",
-                    "targets": [
-                        f"{resistance} (near resistance)",
-                        f"{round(resistance * 1.02, 2)} (extension)"
-                    ]
-                },
-                "risk_notes": [
-                    "After-hours liquidity is thin",
-                    "Expect wider spreads at open",
-                    "Wait for volume confirmation"
-                ],
-                "summary": (
-                    f"{symbol} last closed at ${price} ({change}%). "
-                    "Live data is offline; structure is based on the most recent confirmed session."
-                ),
-                "reasoning": trader_reasoning(bias, support, resistance)
-            }
-
-            LAST_SNAPSHOT[symbol] = payload
-            return jsonify(payload)
-
+    if not last_trade and not d:
         if symbol in LAST_SNAPSHOT:
             cached = LAST_SNAPSHOT[symbol].copy()
             cached["summary"] += (
                 " Live market data is temporarily unavailable. "
-                "This analysis is based on the most recent confirmed market structure "
-                f"for {symbol} and remains valid for strategic planning. "
-                "Await fresh volume before acting."
+                "This analysis is based on the most recent confirmed structure "
+                f"for {symbol}. Await fresh price flow."
             )
             return jsonify(cached)
 
-        return jsonify({
-            "ticker": symbol,
-            "price": "—",
-            "bias": "Unavailable",
-            "trend": "No live feed",
-            "levels": {"support": "—", "resistance": "—"},
-            "plan": {"entry": "Wait for data", "stop": "N/A", "targets": []},
-            "risk_notes": [
-                "No market data returned from provider.",
-                "This can occur after-hours or during API outages.",
-                "Try again shortly."
-            ],
-            "summary": (
-                "Live market data is temporarily unavailable. "
-                f"{symbol} has no confirmed session data yet."
-            ),
-            "reasoning": "Market structure cannot be evaluated without confirmed price flow."
-        })
-
-    # AFTER-HOURS WITH LAST TRADE
-    if not candles:
-        d = get_prev(symbol)
-        price = last_trade or round(d["c"], 2)
-        open_price = d["o"] if d else price
-        change = round(((price - open_price) / open_price) * 100, 2)
-
-        bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
-        trend = "Sideways (after-hours)"
-
-        support = round(price * 0.99, 2)
-        resistance = round(price * 1.01, 2)
-
         payload = {
             "ticker": symbol,
-            "price": price,
-            "change": change,
-            "bias": bias,
-            "trend": trend,
-            "levels": {"support": str(support), "resistance": str(resistance)},
+            "price": "—",
+            "change": 0,
+            "bias": "Neutral",
+            "trend": "Unknown",
+            "levels": {"support": "N/A", "resistance": "N/A"},
             "plan": {
-                "entry": f"{round(price * 1.003, 2)} – break above current range",
-                "stop": f"{support} – below session support",
-                "targets": [
-                    f"{resistance} (near resistance)",
-                    f"{round(resistance * 1.02, 2)} (extension)"
-                ]
+                "entry": "Wait for confirmation",
+                "stop": "Define after data",
+                "targets": []
             },
             "risk_notes": [
-                "After-hours liquidity is thin",
-                "Expect wider spreads at open",
-                "Wait for volume confirmation"
+                "Live feed unavailable",
+                "Structure is synthetic",
+                "Do not trade without price confirmation"
             ],
             "summary": (
-                f"{symbol} last traded at ${price} ({change}%). "
-                "Market is currently closed; using most recent confirmed data."
+                f"{symbol} data is currently unavailable. "
+                "This is a structural placeholder only."
             ),
-            "reasoning": trader_reasoning(bias, support, resistance)
+            "reasoning": (
+                "Without confirmed price flow, the market is treated as neutral. "
+                "Professional traders remain flat in these conditions."
+            )
         }
 
         LAST_SNAPSHOT[symbol] = payload
         return jsonify(payload)
 
-    # INTRADAY PATH
-    closes = [c["c"] for c in candles]
-    highs = [c["h"] for c in candles]
+    if last_trade and d:
+        price = last_trade
+        open_price = d["o"]
+    elif d:
+        price = round(d["c"], 2)
+        open_price = d["o"]
+    else:
+        price = last_trade
+        open_price = price
 
-    price = round(closes[-1], 2)
-    open_price = candles[0]["o"]
-    change = round(((price - open_price) / open_price) * 100, 2)
+    change = round(((price - open_price) / open_price) * 100, 2) if open_price else 0
 
-    ema9 = mean(closes[-9:])
-    ema21 = mean(closes[-21:]) if len(closes) >= 21 else mean(closes)
+    bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
+    trend = "Active Market" if last_trade else "After-hours"
 
-    bias = "Bullish" if price > ema21 else "Bearish" if price < ema21 else "Neutral"
-    trend = "Upward (short-term)" if ema9 > ema21 else "Downward (short-term)"
-
-    support = round(ema21, 2)
-    resistance = round(max(highs), 2)
+    support = round(price * 0.99, 2)
+    resistance = round(price * 1.01, 2)
 
     payload = {
         "ticker": symbol,
@@ -278,21 +143,21 @@ def analyze():
         "trend": trend,
         "levels": {"support": str(support), "resistance": str(resistance)},
         "plan": {
-            "entry": f"{round(price * 1.003, 2)} – break above current range",
-            "stop": f"{round(ema21 * 0.995, 2)} – below trend support",
+            "entry": f"{round(price * 1.003, 2)} – reclaim momentum",
+            "stop": f"{support} – below structure",
             "targets": [
-                f"{resistance} (range high)",
+                f"{resistance} (first objective)",
                 f"{round(resistance * 1.02, 2)} (extension)"
             ]
         },
         "risk_notes": [
-            "Watch volume for confirmation",
-            "Be cautious near resistance",
-            "Move stop to breakeven on strength"
+            "Confirm with volume",
+            "Avoid chasing extensions",
+            "Reduce size in chop"
         ],
         "summary": (
             f"{symbol} is trading at ${price} ({change}%). "
-            f"Structure remains {bias.lower()} with {trend.lower()} momentum."
+            f"Market bias is {bias.lower()}."
         ),
         "reasoning": trader_reasoning(bias, support, resistance)
     }
