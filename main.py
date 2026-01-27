@@ -9,8 +9,11 @@ CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
-# Simple universe for movers (stocks + crypto-style tickers)
+# Simple universe for movers
 STOCK_MOVERS = ["NVDA", "TSLA", "AMD", "SMCI", "PLTR", "COIN", "MARA", "RIOT", "BITF", "BTBT"]
+
+# Cache last successful analysis per ticker
+LAST_SNAPSHOT = {}
 
 @app.route("/")
 def home():
@@ -70,12 +73,10 @@ def chart():
         if not data:
             y = (today - timedelta(days=1)).strftime("%Y-%m-%d")
             data = polygon_ohlc(symbol, 1, "minute", y, y)
-
     elif tf == "5D":
         start = (today - timedelta(days=5)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 5, "minute", start, end)
-
-    else:  # 1M
+    else:
         start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 1, "day", start, end)
 
@@ -107,33 +108,22 @@ def analyze():
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
 
+    # If provider fails, fall back to cached snapshot
+    if not candles and not last_trade:
+        if symbol in LAST_SNAPSHOT:
+            cached = LAST_SNAPSHOT[symbol].copy()
+            cached["summary"] += (
+                " Live market data is temporarily unavailable. "
+                "This analysis is based on the most recent confirmed market structure "
+                "and remains valid for strategic planning. Await fresh volume before acting."
+            )
+            return jsonify(cached)
+
+        return jsonify({"error": "Market data unavailable"}), 503
+
     # AFTER-HOURS / CLOSED MARKET
     if not candles:
         d = get_prev(symbol)
-
-        # OPTION B: Graceful fallback – never 503
-        if not d and not last_trade:
-            return jsonify({
-                "ticker": symbol,
-                "price": "—",
-                "bias": "Unavailable",
-                "trend": "No live feed",
-                "levels": {
-                    "support": "—",
-                    "resistance": "—"
-                },
-                "plan": {
-                    "entry": "Wait for data",
-                    "stop": "N/A",
-                    "targets": []
-                },
-                "risk_notes": [
-                    "No market data returned from provider.",
-                    "This can occur after-hours or during API outages.",
-                    "Try again in a moment."
-                ],
-                "summary": f"{symbol} data is temporarily unavailable. This is usually caused by after-hours gaps or API limits."
-            })
 
         price = last_trade or round(d["c"], 2)
         open_price = d["o"] if d else price
@@ -160,11 +150,11 @@ def analyze():
 
         summary = (
             f"{symbol} last traded at ${price} ({change}%). "
-            "Market is currently closed; using most recent data. "
-            f"Bias is {bias} with a {trend.lower()} structure."
+            "Market is currently closed; using most recent confirmed data. "
+            f"Bias is {bias} with a sideways after-hours structure."
         )
 
-        return jsonify({
+        payload = {
             "ticker": symbol,
             "price": price,
             "change": change,
@@ -181,12 +171,14 @@ def analyze():
             },
             "risk_notes": risk_notes,
             "summary": summary
-        })
+        }
+
+        LAST_SNAPSHOT[symbol] = payload
+        return jsonify(payload)
 
     # INTRADAY PATH
     closes = [c["c"] for c in candles]
     highs = [c["h"] for c in candles]
-    lows = [c["l"] for c in candles]
 
     price = round(closes[-1], 2)
     open_price = candles[0]["o"]
@@ -220,7 +212,7 @@ def analyze():
         f"Holding above {support} favors continuation."
     )
 
-    return jsonify({
+    payload = {
         "ticker": symbol,
         "price": price,
         "change": change,
@@ -237,7 +229,10 @@ def analyze():
         },
         "risk_notes": risk_notes,
         "summary": summary
-    })
+    }
+
+    LAST_SNAPSHOT[symbol] = payload
+    return jsonify(payload)
 
 @app.route("/movers")
 def movers():
