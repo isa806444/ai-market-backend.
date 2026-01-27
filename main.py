@@ -9,7 +9,6 @@ CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
-# Simple universe for movers (stocks + crypto-style tickers)
 STOCK_MOVERS = ["NVDA", "TSLA", "AMD", "SMCI", "PLTR", "COIN", "MARA", "RIOT", "BITF", "BTBT"]
 
 # Cache last successful analysis per ticker
@@ -65,8 +64,6 @@ def chart():
     today = datetime.utcnow()
     end = today.strftime("%Y-%m-%d")
 
-    data = []
-
     if tf == "1D":
         start = end
         data = polygon_ohlc(symbol, 1, "minute", start, end)
@@ -76,27 +73,42 @@ def chart():
     elif tf == "5D":
         start = (today - timedelta(days=5)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 5, "minute", start, end)
-    else:  # 1M
+    else:
         start = (today - timedelta(days=30)).strftime("%Y-%m-%d")
         data = polygon_ohlc(symbol, 1, "day", start, end)
 
-    candles = []
-    for c in data:
-        candles.append({
-            "time": int(c["t"] / 1000),
-            "open": c["o"],
-            "high": c["h"],
-            "low": c["l"],
-            "close": c["c"]
-        })
+    candles = [{
+        "time": int(c["t"] / 1000),
+        "open": c["o"],
+        "high": c["h"],
+        "low": c["l"],
+        "close": c["c"]
+    } for c in data]
 
     return jsonify(candles)
+
+def trader_reasoning(bias, trend, support, resistance):
+    if bias == "Bullish":
+        return (
+            f"Price is holding above key support near {support}, keeping buyers in control. "
+            f"Momentum favors continuation toward {resistance}, but strength must be confirmed by volume. "
+            "Failure to hold trend support would invalidate the setup."
+        )
+    if bias == "Bearish":
+        return (
+            f"Price remains capped beneath resistance near {resistance}, signaling supply overhead. "
+            f"Rallies without volume are likely to fade back toward {support}. "
+            "Only a clean reclaim of resistance would shift control."
+        )
+    return (
+        "Price is compressing inside a narrow range, reflecting balance between buyers and sellers. "
+        "Without expansion in volume, directional attempts are prone to failure. "
+        "Wait for a decisive break before committing risk."
+    )
 
 @app.route("/analyze")
 def analyze():
     symbol = request.args.get("ticker") or request.args.get("symbol")
-    mode = request.args.get("mode", "day")
-
     if not symbol:
         return jsonify({"error": "Missing ticker"}), 400
     if not POLYGON_KEY:
@@ -108,15 +120,14 @@ def analyze():
     candles = polygon_ohlc(symbol, 1, "minute", today, today)
     last_trade = get_last_trade(symbol)
 
-    # Provider failure → return cached AI snapshot instead of 503
+    # Provider outage – fall back to cached snapshot
     if not candles and not last_trade:
         if symbol in LAST_SNAPSHOT:
             cached = LAST_SNAPSHOT[symbol].copy()
             cached["summary"] += (
                 " Live market data is temporarily unavailable. "
-                "This analysis is based on the most recent confirmed market structure "
-                f"for {symbol} and remains valid for strategic planning. "
-                "Await fresh volume before acting."
+                "This analysis is based on the most recent confirmed market structure for "
+                f"{symbol} and remains valid for strategic planning. Await fresh volume before acting."
             )
             return jsonify(cached)
 
@@ -125,32 +136,20 @@ def analyze():
             "price": "—",
             "bias": "Unavailable",
             "trend": "No live feed",
-            "levels": {
-                "support": "—",
-                "resistance": "—"
-            },
-            "plan": {
-                "entry": "Wait for data",
-                "stop": "N/A",
-                "targets": []
-            },
+            "levels": {"support": "—", "resistance": "—"},
+            "plan": {"entry": "Wait for data", "stop": "N/A", "targets": []},
             "risk_notes": [
                 "No market data returned from provider.",
                 "This can occur after-hours or during API outages.",
                 "Try again shortly."
             ],
-            "summary": (
-                "Live market data is temporarily unavailable. "
-                "This analysis is based on the most recent confirmed market structure "
-                f"for {symbol} and remains valid for strategic planning. "
-                "Await fresh volume before acting."
-            )
+            "summary": f"{symbol} data is temporarily unavailable.",
+            "reasoning": "Market structure cannot be evaluated without confirmed price data."
         })
 
-    # AFTER-HOURS / CLOSED MARKET
+    # AFTER-HOURS
     if not candles:
         d = get_prev(symbol)
-
         price = last_trade or round(d["c"], 2)
         open_price = d["o"] if d else price
         change = round(((price - open_price) / open_price) * 100, 2)
@@ -161,48 +160,37 @@ def analyze():
         support = round(price * 0.99, 2)
         resistance = round(price * 1.01, 2)
 
-        plan_entry = f"{round(price * 1.003, 2)} – break above current range"
-        plan_stop = f"{support} – below session support"
-        targets = [
-            f"{round(resistance, 2)} (near resistance)",
-            f"{round(resistance * 1.02, 2)} (extension)"
-        ]
-
-        risk_notes = [
-            "After-hours liquidity is thin",
-            "Expect wider spreads at open",
-            "Wait for volume confirmation"
-        ]
-
-        summary = (
-            f"{symbol} last traded at ${price} ({change}%). "
-            "Market is currently closed; using most recent confirmed data. "
-            f"Bias is {bias} with a sideways after-hours structure."
-        )
-
         payload = {
             "ticker": symbol,
             "price": price,
             "change": change,
             "bias": bias,
             "trend": trend,
-            "levels": {
-                "support": str(support),
-                "resistance": str(resistance)
-            },
+            "levels": {"support": str(support), "resistance": str(resistance)},
             "plan": {
-                "entry": plan_entry,
-                "stop": plan_stop,
-                "targets": targets
+                "entry": f"{round(price * 1.003, 2)} – break above current range",
+                "stop": f"{support} – below session support",
+                "targets": [
+                    f"{resistance} (near resistance)",
+                    f"{round(resistance * 1.02, 2)} (extension)"
+                ]
             },
-            "risk_notes": risk_notes,
-            "summary": summary
+            "risk_notes": [
+                "After-hours liquidity is thin",
+                "Expect wider spreads at open",
+                "Wait for volume confirmation"
+            ],
+            "summary": (
+                f"{symbol} last traded at ${price} ({change}%). "
+                "Market is currently closed; using most recent confirmed data."
+            ),
+            "reasoning": trader_reasoning(bias, trend, support, resistance)
         }
 
         LAST_SNAPSHOT[symbol] = payload
         return jsonify(payload)
 
-    # INTRADAY PATH
+    # INTRADAY
     closes = [c["c"] for c in candles]
     highs = [c["h"] for c in candles]
 
@@ -219,42 +207,31 @@ def analyze():
     support = round(ema21, 2)
     resistance = round(max(highs), 2)
 
-    plan_entry = f"{round(price * 1.003, 2)} – break above current range"
-    plan_stop = f"{round(ema21 * 0.995, 2)} – below trend support"
-    targets = [
-        f"{round(resistance, 2)} (range high)",
-        f"{round(resistance * 1.02, 2)} (extension)"
-    ]
-
-    risk_notes = [
-        "Watch volume for confirmation",
-        "Be cautious near resistance",
-        "Move stop to breakeven on strength"
-    ]
-
-    summary = (
-        f"{symbol} is trading at ${price} ({change}%). "
-        f"Structure remains {bias.lower()} with {trend.lower()} momentum. "
-        f"Holding above {support} favors continuation."
-    )
-
     payload = {
         "ticker": symbol,
         "price": price,
         "change": change,
         "bias": bias,
         "trend": trend,
-        "levels": {
-            "support": str(support),
-            "resistance": str(resistance)
-        },
+        "levels": {"support": str(support), "resistance": str(resistance)},
         "plan": {
-            "entry": plan_entry,
-            "stop": plan_stop,
-            "targets": targets
+            "entry": f"{round(price * 1.003, 2)} – break above current range",
+            "stop": f"{round(ema21 * 0.995, 2)} – below trend support",
+            "targets": [
+                f"{resistance} (range high)",
+                f"{round(resistance * 1.02, 2)} (extension)"
+            ]
         },
-        "risk_notes": risk_notes,
-        "summary": summary
+        "risk_notes": [
+            "Watch volume for confirmation",
+            "Be cautious near resistance",
+            "Move stop to breakeven on strength"
+        ],
+        "summary": (
+            f"{symbol} is trading at ${price} ({change}%). "
+            f"Structure remains {bias.lower()} with {trend.lower()} momentum."
+        ),
+        "reasoning": trader_reasoning(bias, trend, support, resistance)
     }
 
     LAST_SNAPSHOT[symbol] = payload
