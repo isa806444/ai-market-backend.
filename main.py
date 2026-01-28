@@ -82,32 +82,53 @@ def health():
 def market_now():
     return datetime.now(ZoneInfo("America/New_York"))
 
+# 🔵 INSERTED: Hardened Polygon previous-close fetch
 def get_prev(symbol):
     url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/prev?apiKey={POLYGON_KEY}"
     r = requests.get(url, timeout=10)
-    d = r.json()
-    if "results" not in d or not d["results"]:
+    try:
+        d = r.json()
+    except Exception as e:
+        print("PREV JSON ERROR:", e, r.text)
         return None
+
+    if "results" not in d or not d["results"]:
+        print("PREV EMPTY:", d)
+        return None
+
     return d["results"][0]
+    except Exception as e:
+        print("get_prev error:", e)
+        return None
 
 def get_last_trade(symbol):
     try:
-        r = requests.get(
-            f"https://api.polygon.io/v2/last/trade/{symbol}?apiKey={POLYGON_KEY}",
-            timeout=5
-        )
-        d = r.json()
-        if "results" in d and "p" in d["results"]:
-            return round(d["results"]["p"], 2)
-    except:
-        pass
-    return None
+        url = f"https://api.polygon.io/v2/last/trade/{symbol}?apiKey={POLYGON_KEY}"
+        r = requests.get(url, timeout=5)
 
-def get_scanner_price(symbol):
-    for x in SCANNER_RESULTS:
-        if x["ticker"] == symbol:
-            return x["price"]
-    return None
+        if r.status_code != 200:
+            print("LAST HTTP ERROR:", symbol, r.status_code, r.text)
+            return None
+
+        try:
+            d = r.json()
+        except Exception as e:
+            print("LAST JSON ERROR:", symbol, e, r.text)
+            return None
+
+        if "results" not in d or not d["results"]:
+            print("LAST EMPTY:", symbol, d)
+            return None
+
+        if "p" not in d["results"]:
+            print("LAST MISSING PRICE:", symbol, d["results"])
+            return None
+
+        return round(d["results"]["p"], 2)
+
+    except Exception as e:
+        print("get_last_trade error:", symbol, e)
+        return None
 
 def trader_reasoning(bias, support, resistance, tone):
     if bias == "Bullish":
@@ -149,8 +170,16 @@ def build_liquid_universe():
             f"?adjusted=true&apiKey={POLYGON_KEY}"
         )
 
-        r = requests.get(url, timeout=20)
-        data = r.json().get("results", [])
+        try:
+            r = requests.get(url, timeout=20)
+            if r.status_code != 200:
+                check_day -= timedelta(days=1)
+                continue
+
+            data = r.json().get("results", [])
+        except:
+            check_day -= timedelta(days=1)
+            continue
 
         if data:
             ranked = []
@@ -184,7 +213,10 @@ def scanner_loop():
                 if not last or not prev:
                     continue
 
-                o = prev["o"]
+                o = prev.get("o")
+                if not o:
+                    continue
+
                 change = round(((last - o) / o) * 100, 2)
 
                 movers.append({
@@ -233,7 +265,6 @@ def analyze():
 
         print("LAST:", last_trade, "PREV:", d, "SCANNER:", scanner_price)
 
-        # Fallback to scanner price if Polygon fails
         if not last_trade and not d and scanner_price:
             last_trade = scanner_price
 
@@ -268,10 +299,10 @@ def analyze():
 
         if last_trade and d:
             price = last_trade
-            open_price = d["o"]
+            open_price = d.get("o")
         elif d:
-            price = round(d["c"], 2)
-            open_price = d["o"]
+            price = round(d.get("c", 0), 2)
+            open_price = d.get("o")
         else:
             price = last_trade
             open_price = price
@@ -337,7 +368,6 @@ def analyze():
             "reasoning": trader_reasoning(bias, support, resistance, tone)
         }
 
-        # 🔵 INSERTED: Strategy-specific augmentation (no deletions)
         profile = STRATEGY_PROFILES.get(strategy)
         if profile:
             payload["mode_banner"] = profile["banner"]
