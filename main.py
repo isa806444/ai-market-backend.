@@ -97,6 +97,7 @@ def get_prev(symbol):
         return None
 
     return d["results"][0]
+
     except Exception as e:
         print("get_prev error:", e)
         return None
