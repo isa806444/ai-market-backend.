@@ -17,6 +17,60 @@ SCANNER_RESULTS = []
 LIQUID_UNIVERSE = []
 LAST_SCAN = None
 
+# 🔵 INSERTED: Strategy profiles to make each mode truly distinct
+STRATEGY_PROFILES = {
+    "scalp": {
+        "banner": "SCALP — High-speed micro moves. Tight stops. Rapid exits.",
+        "style": "scalp",
+        "risk": [
+            "Slippage risk is elevated",
+            "Execution speed matters",
+            "Do not hold through pullbacks"
+        ],
+        "summary_suffix": " This is a precision execution environment."
+    },
+    "day": {
+        "banner": "DAY — Intraday structure. Trend + momentum balance.",
+        "style": "day",
+        "risk": [
+            "Midday chop can invalidate setups",
+            "Avoid overtrading",
+            "Respect VWAP reactions"
+        ],
+        "summary_suffix": " Designed for session-based positioning."
+    },
+    "swing": {
+        "banner": "SWING — Multi-day positioning. Wider stops. Larger targets.",
+        "style": "swing",
+        "risk": [
+            "Overnight gap risk",
+            "Macro news sensitivity",
+            "Requires patience"
+        ],
+        "summary_suffix": " This thesis spans multiple sessions."
+    },
+    "momentum": {
+        "banner": "MOMENTUM — Breakouts and continuation. Ride strength.",
+        "style": "momentum",
+        "risk": [
+            "Failed breakouts reverse fast",
+            "Late entries get trapped",
+            "Volume confirmation is mandatory"
+        ],
+        "summary_suffix": " Designed for acceleration phases."
+    },
+    "mean": {
+        "banner": "MEAN — Fade extremes. Reversion to equilibrium.",
+        "style": "mean",
+        "risk": [
+            "Trends can overpower mean reversion",
+            "Early entries compound loss",
+            "Scale in only at extremes"
+        ],
+        "summary_suffix": " This is a counter-trend framework."
+    }
+}
+
 @app.route("/")
 def home():
     return "AI Market Backend is running!"
@@ -282,6 +336,14 @@ def analyze():
             ),
             "reasoning": trader_reasoning(bias, support, resistance, tone)
         }
+
+        # 🔵 INSERTED: Strategy-specific augmentation (no deletions)
+        profile = STRATEGY_PROFILES.get(strategy)
+        if profile:
+            payload["mode_banner"] = profile["banner"]
+            payload["ui_style"] = profile["style"]
+            payload["risk_notes"] = payload["risk_notes"] + profile["risk"]
+            payload["summary"] = payload["summary"] + profile["summary_suffix"]
 
         LAST_SNAPSHOT[symbol] = payload
         return jsonify(payload)
