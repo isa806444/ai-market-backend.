@@ -96,11 +96,7 @@ def get_prev(symbol):
         print("PREV EMPTY:", d)
         return None
 
-    return d["results"][0]
-
-    except Exception as e:
-        print("get_prev error:", e)
-        return None
+        return d["results"][0]
 
 def get_last_trade(symbol):
     try:
