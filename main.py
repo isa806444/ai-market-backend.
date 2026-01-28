@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import os, requests
+import os, requests, threading, time
 from statistics import mean
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -10,8 +10,12 @@ CORS(app)
 
 POLYGON_KEY = os.environ.get("POLYGON_API_KEY")
 
-# Cache last successful analysis per ticker
 LAST_SNAPSHOT = {}
+
+# 🔴 Scanner state
+SCANNER_RESULTS = []
+LIQUID_UNIVERSE = []
+LAST_SCAN = None
 
 @app.route("/")
 def home():
@@ -63,6 +67,92 @@ def trader_reasoning(bias, support, resistance):
         "Without volume expansion, directional attempts are prone to failure. "
         "Wait for a decisive break before committing risk."
     )
+
+# =========================
+# 🔴 BACKGROUND SCANNER
+# =========================
+
+def build_liquid_universe():
+    global LIQUID_UNIVERSE
+
+    now = market_now()
+    check_day = now
+
+    for _ in range(7):
+        if check_day.weekday() >= 5:
+            check_day -= timedelta(days=1)
+            continue
+
+        day = check_day.strftime("%Y-%m-%d")
+        url = (
+            f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
+            f"?adjusted=true&apiKey={POLYGON_KEY}"
+        )
+
+        r = requests.get(url, timeout=20)
+        data = r.json().get("results", [])
+
+        if data:
+            ranked = []
+            for d in data:
+                o = d.get("o", 0)
+                c = d.get("c", 0)
+                v = d.get("v", 0)
+                if o and c and v:
+                    dollar_vol = c * v
+                    ranked.append((d["T"], dollar_vol))
+
+            ranked.sort(key=lambda x: x[1], reverse=True)
+            LIQUID_UNIVERSE = [t[0] for t in ranked[:500]]
+            return
+
+        check_day -= timedelta(days=1)
+
+def scanner_loop():
+    global SCANNER_RESULTS, LAST_SCAN
+
+    while True:
+        try:
+            if not LIQUID_UNIVERSE:
+                build_liquid_universe()
+
+            movers = []
+
+            for sym in LIQUID_UNIVERSE:
+                last = get_last_trade(sym)
+                prev = get_prev(sym)
+                if not last or not prev:
+                    continue
+
+                o = prev["o"]
+                change = round(((last - o) / o) * 100, 2)
+
+                movers.append({
+                    "ticker": sym,
+                    "price": last,
+                    "change": change
+                })
+
+            movers.sort(key=lambda x: abs(x["change"]), reverse=True)
+            SCANNER_RESULTS = movers[:25]
+            LAST_SCAN = market_now().isoformat()
+
+        except Exception as e:
+            print("Scanner error:", e)
+
+        time.sleep(60)
+
+@app.route("/scanner")
+def scanner():
+    return jsonify({
+        "last_scan": LAST_SCAN,
+        "universe_size": len(LIQUID_UNIVERSE),
+        "results": SCANNER_RESULTS
+    })
+
+# =========================
+# EXISTING ROUTES (UNCHANGED)
+# =========================
 
 @app.route("/analyze")
 def analyze():
@@ -165,50 +255,8 @@ def analyze():
     LAST_SNAPSHOT[symbol] = payload
     return jsonify(payload)
 
-@app.route("/movers")
-def movers():
-    if not POLYGON_KEY:
-        return jsonify([])
-
-    try:
-        check_day = market_now()
-
-        for _ in range(7):
-            if check_day.weekday() >= 5:
-                check_day -= timedelta(days=1)
-                continue
-
-            day = check_day.strftime("%Y-%m-%d")
-            url = (
-                f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{day}"
-                f"?adjusted=true&apiKey={POLYGON_KEY}"
-            )
-            r = requests.get(url, timeout=15)
-            data = r.json().get("results", [])
-
-            if data:
-                movers = []
-                for d in data:
-                    o = d.get("o", 0)
-                    c = d.get("c", 0)
-                    if o and c:
-                        change = round(((c - o) / o) * 100, 2)
-                        movers.append({
-                            "ticker": d["T"],
-                            "price": round(c, 2),
-                            "change": change
-                        })
-
-                movers = sorted(movers, key=lambda x: abs(x["change"]), reverse=True)
-                return jsonify(movers[:5])
-
-            check_day -= timedelta(days=1)
-
-        return jsonify([])
-
-    except Exception as e:
-        print("Movers error:", e)
-        return jsonify([])
+# 🔴 Start scanner thread on boot
+threading.Thread(target=scanner_loop, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
