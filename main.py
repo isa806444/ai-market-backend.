@@ -173,6 +173,12 @@ def analyze():
     print("LAST:", last_trade, "PREV:", d)
 
     if not last_trade and not d:
+        # Use last known good snapshot if available
+        if symbol in LAST_SNAPSHOT:
+            cached = LAST_SNAPSHOT[symbol].copy()
+            cached["summary"] += " (Live feed temporarily unavailable)"
+            return jsonify(cached)
+
         payload = {
             "ticker": symbol,
             "price": "—",
@@ -213,7 +219,6 @@ def analyze():
     support = round(price * 0.99, 2)
     resistance = round(price * 1.01, 2)
 
-    # 🔴 STRATEGY LOGIC
     if strategy == "scalp":
         entry = f"{round(price * 1.001, 2)} – micro breakout"
         stop = f"{round(price * 0.998, 2)} – tight risk"
@@ -234,7 +239,7 @@ def analyze():
         stop = f"{round(price * 1.01, 2)} – invalidation"
         targets = [f"{round(price * 0.985, 2)}", f"{round(price * 0.97, 2)}"]
         tone = "Reversion environment."
-    else:  # day default
+    else:
         entry = f"{round(price * 1.003, 2)} – reclaim momentum"
         stop = f"{support} – below structure"
         targets = [
