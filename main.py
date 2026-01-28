@@ -169,6 +169,8 @@ def analyze():
     last_trade = get_last_trade(symbol)
     d = get_prev(symbol)
 
+    print("LAST:", last_trade. "PREV:", d)
+
     if not last_trade and not d:
         payload = {
             "ticker": symbol,
