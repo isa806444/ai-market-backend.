@@ -49,23 +49,23 @@ def get_last_trade(symbol):
         pass
     return None
 
-def trader_reasoning(bias, support, resistance):
+def trader_reasoning(bias, support, resistance, tone):
     if bias == "Bullish":
         return (
-            f"Price is holding above key demand near {support}, keeping buyers in control. "
-            f"Momentum favors continuation toward {resistance}, but strength must be confirmed by volume. "
-            "A failure to hold trend support invalidates the setup."
+            f"{tone} Price is holding above {support}, keeping buyers in control. "
+            f"Continuation favors {resistance} if volume confirms. "
+            "Loss of structure invalidates the setup."
         )
     if bias == "Bearish":
         return (
-            f"Price remains capped beneath resistance near {resistance}, signaling overhead supply. "
-            f"Rallies without volume are likely to fade back toward {support}. "
-            "Only a clean reclaim of resistance shifts control."
+            f"{tone} Price is capped beneath {resistance}, signaling supply. "
+            f"Rallies without volume likely fade toward {support}. "
+            "Only reclaiming resistance shifts control."
         )
     return (
-        "Price is compressing inside a tight range, reflecting balance between buyers and sellers. "
-        "Without volume expansion, directional attempts are prone to failure. "
-        "Wait for a decisive break before committing risk."
+        f"{tone} Price is compressing in balance. "
+        "Without expansion, directional attempts fail. "
+        "Wait for a decisive break."
     )
 
 # =========================
@@ -151,12 +151,14 @@ def scanner():
     })
 
 # =========================
-# EXISTING ROUTES (UNCHANGED)
+# ANALYZE WITH STRATEGIES
 # =========================
 
 @app.route("/analyze")
 def analyze():
     symbol = request.args.get("ticker") or request.args.get("symbol")
+    strategy = request.args.get("strategy", "day").lower()
+
     if not symbol:
         return jsonify({"error": "Missing ticker"}), 400
     if not POLYGON_KEY:
@@ -168,15 +170,6 @@ def analyze():
     d = get_prev(symbol)
 
     if not last_trade and not d:
-        if symbol in LAST_SNAPSHOT:
-            cached = LAST_SNAPSHOT[symbol].copy()
-            cached["summary"] += (
-                " Live market data is temporarily unavailable. "
-                "This analysis is based on the most recent confirmed structure "
-                f"for {symbol}. Await fresh price flow."
-            )
-            return jsonify(cached)
-
         payload = {
             "ticker": symbol,
             "price": "—",
@@ -194,16 +187,9 @@ def analyze():
                 "Structure is synthetic",
                 "Do not trade without price confirmation"
             ],
-            "summary": (
-                f"{symbol} data is currently unavailable. "
-                "This is a structural placeholder only."
-            ),
-            "reasoning": (
-                "Without confirmed price flow, the market is treated as neutral. "
-                "Professional traders remain flat in these conditions."
-            )
+            "summary": f"{symbol} data is currently unavailable.",
+            "reasoning": "No confirmed price flow."
         }
-
         LAST_SNAPSHOT[symbol] = payload
         return jsonify(payload)
 
@@ -218,12 +204,41 @@ def analyze():
         open_price = price
 
     change = round(((price - open_price) / open_price) * 100, 2) if open_price else 0
-
     bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
     trend = "Active Market" if last_trade else "After-hours"
 
     support = round(price * 0.99, 2)
     resistance = round(price * 1.01, 2)
+
+    # 🔴 STRATEGY LOGIC
+    if strategy == "scalp":
+        entry = f"{round(price * 1.001, 2)} – micro breakout"
+        stop = f"{round(price * 0.998, 2)} – tight risk"
+        targets = [f"{round(price * 1.004, 2)}", f"{round(price * 1.007, 2)}"]
+        tone = "Fast execution environment."
+    elif strategy == "swing":
+        entry = f"{round(price * 1.01, 2)} – reclaim structure"
+        stop = f"{round(price * 0.96, 2)} – below weekly support"
+        targets = [f"{round(price * 1.08, 2)}", f"{round(price * 1.15, 2)}"]
+        tone = "Multi-session thesis."
+    elif strategy == "momentum":
+        entry = f"{round(price * 1.005, 2)} – momentum continuation"
+        stop = f"{round(price * 0.992, 2)} – trend failure"
+        targets = [f"{round(price * 1.03, 2)}", f"{round(price * 1.06, 2)}"]
+        tone = "Trend acceleration regime."
+    elif strategy == "mean":
+        entry = f"{round(price * 0.995, 2)} – fade extension"
+        stop = f"{round(price * 1.01, 2)} – invalidation"
+        targets = [f"{round(price * 0.985, 2)}", f"{round(price * 0.97, 2)}"]
+        tone = "Reversion environment."
+    else:  # day trade default
+        entry = f"{round(price * 1.003, 2)} – reclaim momentum"
+        stop = f"{support} – below structure"
+        targets = [
+            f"{resistance} (first objective)",
+            f"{round(resistance * 1.02, 2)} (extension)"
+        ]
+        tone = "Intraday structure-focused."
 
     payload = {
         "ticker": symbol,
@@ -231,25 +246,23 @@ def analyze():
         "change": change,
         "bias": bias,
         "trend": trend,
+        "strategy": strategy,
         "levels": {"support": str(support), "resistance": str(resistance)},
         "plan": {
-            "entry": f"{round(price * 1.003, 2)} – reclaim momentum",
-            "stop": f"{support} – below structure",
-            "targets": [
-                f"{resistance} (first objective)",
-                f"{round(resistance * 1.02, 2)} (extension)"
-            ]
+            "entry": entry,
+            "stop": stop,
+            "targets": targets
         },
         "risk_notes": [
             "Confirm with volume",
-            "Avoid chasing extensions",
-            "Reduce size in chop"
+            "Avoid chasing",
+            "Respect invalidation"
         ],
         "summary": (
             f"{symbol} is trading at ${price} ({change}%). "
-            f"Market bias is {bias.lower()}."
+            f"{strategy.title()} bias is {bias.lower()}."
         ),
-        "reasoning": trader_reasoning(bias, support, resistance)
+        "reasoning": trader_reasoning(bias, support, resistance, tone)
     }
 
     LAST_SNAPSHOT[symbol] = payload
