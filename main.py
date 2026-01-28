@@ -49,6 +49,12 @@ def get_last_trade(symbol):
         pass
     return None
 
+def get_scanner_price(symbol):
+    for x in SCANNER_RESULTS:
+        if x["ticker"] == symbol:
+            return x["price"]
+    return None
+
 def trader_reasoning(bias, support, resistance, tone):
     if bias == "Bullish":
         return (
@@ -168,12 +174,15 @@ def analyze():
 
     last_trade = get_last_trade(symbol)
     d = get_prev(symbol)
+    scanner_price = get_scanner_price(symbol)
 
-    # 🔍 Diagnostic log
-    print("LAST:", last_trade, "PREV:", d)
+    print("LAST:", last_trade, "PREV:", d, "SCANNER:", scanner_price)
+
+    # Fallback to scanner price if Polygon fails
+    if not last_trade and not d and scanner_price:
+        last_trade = scanner_price
 
     if not last_trade and not d:
-        # Use last known good snapshot if available
         if symbol in LAST_SNAPSHOT:
             cached = LAST_SNAPSHOT[symbol].copy()
             cached["summary"] += " (Live feed temporarily unavailable)"
