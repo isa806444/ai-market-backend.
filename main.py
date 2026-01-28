@@ -162,33 +162,142 @@ def scanner():
 
 @app.route("/analyze")
 def analyze():
-    symbol = request.args.get("ticker") or request.args.get("symbol")
-    strategy = request.args.get("strategy", "day").lower()
+    try:
+        symbol = request.args.get("ticker") or request.args.get("symbol")
+        strategy = request.args.get("strategy", "day").lower()
 
-    if not symbol:
-        return jsonify({"error": "Missing ticker"}), 400
-    if not POLYGON_KEY:
-        return jsonify({"error": "Polygon API key not configured"}), 500
+        if not symbol:
+            return jsonify({"error": "Missing ticker"}), 400
+        if not POLYGON_KEY:
+            return jsonify({"error": "Polygon API key not configured"}), 500
 
-    symbol = symbol.upper()
+        symbol = symbol.upper()
 
-    last_trade = get_last_trade(symbol)
-    d = get_prev(symbol)
-    scanner_price = get_scanner_price(symbol)
+        last_trade = get_last_trade(symbol)
+        d = get_prev(symbol)
+        scanner_price = get_scanner_price(symbol)
 
-    print("LAST:", last_trade, "PREV:", d, "SCANNER:", scanner_price)
+        print("LAST:", last_trade, "PREV:", d, "SCANNER:", scanner_price)
 
-    # Fallback to scanner price if Polygon fails
-    if not last_trade and not d and scanner_price:
-        last_trade = scanner_price
+        # Fallback to scanner price if Polygon fails
+        if not last_trade and not d and scanner_price:
+            last_trade = scanner_price
 
-    if not last_trade and not d:
-        if symbol in LAST_SNAPSHOT:
-            cached = LAST_SNAPSHOT[symbol].copy()
-            cached["summary"] += " (Live feed temporarily unavailable)"
-            return jsonify(cached)
+        if not last_trade and not d:
+            if symbol in LAST_SNAPSHOT:
+                cached = LAST_SNAPSHOT[symbol].copy()
+                cached["summary"] += " (Live feed temporarily unavailable)"
+                return jsonify(cached)
+
+            payload = {
+                "ticker": symbol,
+                "price": "—",
+                "change": 0,
+                "bias": "Neutral",
+                "trend": "Unknown",
+                "levels": {"support": "N/A", "resistance": "N/A"},
+                "plan": {
+                    "entry": "Wait for confirmation",
+                    "stop": "Define after data",
+                    "targets": []
+                },
+                "risk_notes": [
+                    "Live feed unavailable",
+                    "Structure is synthetic",
+                    "Do not trade without price confirmation"
+                ],
+                "summary": f"{symbol} data is currently unavailable.",
+                "reasoning": "No confirmed price flow."
+            }
+            LAST_SNAPSHOT[symbol] = payload
+            return jsonify(payload)
+
+        if last_trade and d:
+            price = last_trade
+            open_price = d["o"]
+        elif d:
+            price = round(d["c"], 2)
+            open_price = d["o"]
+        else:
+            price = last_trade
+            open_price = price
+
+        change = round(((price - open_price) / open_price) * 100, 2) if open_price else 0
+        bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
+        trend = "Active Market" if last_trade else "After-hours"
+
+        support = round(price * 0.99, 2)
+        resistance = round(price * 1.01, 2)
+
+        if strategy == "scalp":
+            entry = f"{round(price * 1.001, 2)} – micro breakout"
+            stop = f"{round(price * 0.998, 2)} – tight risk"
+            targets = [f"{round(price * 1.004, 2)}", f"{round(price * 1.007, 2)}"]
+            tone = "Fast execution environment."
+        elif strategy == "swing":
+            entry = f"{round(price * 1.01, 2)} – reclaim structure"
+            stop = f"{round(price * 0.96, 2)} – below weekly support"
+            targets = [f"{round(price * 1.08, 2)}", f"{round(price * 1.15, 2)}"]
+            tone = "Multi-session thesis."
+        elif strategy == "momentum":
+            entry = f"{round(price * 1.005, 2)} – momentum continuation"
+            stop = f"{round(price * 0.992, 2)} – trend failure"
+            targets = [f"{round(price * 1.03, 2)}", f"{round(price * 1.06, 2)}"]
+            tone = "Trend acceleration regime."
+        elif strategy == "mean":
+            entry = f"{round(price * 0.995, 2)} – fade extension"
+            stop = f"{round(price * 1.01, 2)} – invalidation"
+            targets = [f"{round(price * 0.985, 2)}", f"{round(price * 0.97, 2)}"]
+            tone = "Reversion environment."
+        else:
+            entry = f"{round(price * 1.003, 2)} – reclaim momentum"
+            stop = f"{support} – below structure"
+            targets = [
+                f"{resistance} (first objective)",
+                f"{round(resistance * 1.02, 2)} (extension)"
+            ]
+            tone = "Intraday structure-focused."
 
         payload = {
+            "ticker": symbol,
+            "price": price,
+            "change": change,
+            "bias": bias,
+            "trend": trend,
+            "strategy": strategy,
+            "levels": {"support": str(support), "resistance": str(resistance)},
+            "plan": {
+                "entry": entry,
+                "stop": stop,
+                "targets": targets
+            },
+            "risk_notes": [
+                "Confirm with volume",
+                "Avoid chasing",
+                "Respect invalidation"
+            ],
+            "summary": (
+                f"{symbol} is trading at ${price} ({change}%). "
+                f"{strategy.title()} bias is {bias.lower()}."
+            ),
+            "reasoning": trader_reasoning(bias, support, resistance, tone)
+        }
+
+        LAST_SNAPSHOT[symbol] = payload
+        return jsonify(payload)
+
+    except Exception as e:
+        print("ANALYZE ERROR:", e)
+
+        symbol = request.args.get("ticker", "UNKNOWN").upper()
+        fallback = LAST_SNAPSHOT.get(symbol)
+
+        if fallback:
+            cached = fallback.copy()
+            cached["summary"] += " (Recovered from backend error)"
+            return jsonify(cached)
+
+        return jsonify({
             "ticker": symbol,
             "price": "—",
             "change": 0,
@@ -196,94 +305,14 @@ def analyze():
             "trend": "Unknown",
             "levels": {"support": "N/A", "resistance": "N/A"},
             "plan": {
-                "entry": "Wait for confirmation",
-                "stop": "Define after data",
+                "entry": "Unavailable",
+                "stop": "Unavailable",
                 "targets": []
             },
-            "risk_notes": [
-                "Live feed unavailable",
-                "Structure is synthetic",
-                "Do not trade without price confirmation"
-            ],
-            "summary": f"{symbol} data is currently unavailable.",
-            "reasoning": "No confirmed price flow."
-        }
-        LAST_SNAPSHOT[symbol] = payload
-        return jsonify(payload)
-
-    if last_trade and d:
-        price = last_trade
-        open_price = d["o"]
-    elif d:
-        price = round(d["c"], 2)
-        open_price = d["o"]
-    else:
-        price = last_trade
-        open_price = price
-
-    change = round(((price - open_price) / open_price) * 100, 2) if open_price else 0
-    bias = "Bullish" if change > 0 else "Bearish" if change < 0 else "Neutral"
-    trend = "Active Market" if last_trade else "After-hours"
-
-    support = round(price * 0.99, 2)
-    resistance = round(price * 1.01, 2)
-
-    if strategy == "scalp":
-        entry = f"{round(price * 1.001, 2)} – micro breakout"
-        stop = f"{round(price * 0.998, 2)} – tight risk"
-        targets = [f"{round(price * 1.004, 2)}", f"{round(price * 1.007, 2)}"]
-        tone = "Fast execution environment."
-    elif strategy == "swing":
-        entry = f"{round(price * 1.01, 2)} – reclaim structure"
-        stop = f"{round(price * 0.96, 2)} – below weekly support"
-        targets = [f"{round(price * 1.08, 2)}", f"{round(price * 1.15, 2)}"]
-        tone = "Multi-session thesis."
-    elif strategy == "momentum":
-        entry = f"{round(price * 1.005, 2)} – momentum continuation"
-        stop = f"{round(price * 0.992, 2)} – trend failure"
-        targets = [f"{round(price * 1.03, 2)}", f"{round(price * 1.06, 2)}"]
-        tone = "Trend acceleration regime."
-    elif strategy == "mean":
-        entry = f"{round(price * 0.995, 2)} – fade extension"
-        stop = f"{round(price * 1.01, 2)} – invalidation"
-        targets = [f"{round(price * 0.985, 2)}", f"{round(price * 0.97, 2)}"]
-        tone = "Reversion environment."
-    else:
-        entry = f"{round(price * 1.003, 2)} – reclaim momentum"
-        stop = f"{support} – below structure"
-        targets = [
-            f"{resistance} (first objective)",
-            f"{round(resistance * 1.02, 2)} (extension)"
-        ]
-        tone = "Intraday structure-focused."
-
-    payload = {
-        "ticker": symbol,
-        "price": price,
-        "change": change,
-        "bias": bias,
-        "trend": trend,
-        "strategy": strategy,
-        "levels": {"support": str(support), "resistance": str(resistance)},
-        "plan": {
-            "entry": entry,
-            "stop": stop,
-            "targets": targets
-        },
-        "risk_notes": [
-            "Confirm with volume",
-            "Avoid chasing",
-            "Respect invalidation"
-        ],
-        "summary": (
-            f"{symbol} is trading at ${price} ({change}%). "
-            f"{strategy.title()} bias is {bias.lower()}."
-        ),
-        "reasoning": trader_reasoning(bias, support, resistance, tone)
-    }
-
-    LAST_SNAPSHOT[symbol] = payload
-    return jsonify(payload)
+            "risk_notes": ["Backend exception recovered"],
+            "summary": f"{symbol} analysis failed gracefully.",
+            "reasoning": "Temporary backend fault."
+        })
 
 # 🔴 Start scanner thread on boot
 threading.Thread(target=scanner_loop, daemon=True).start()
