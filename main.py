@@ -169,6 +169,7 @@ def analyze():
     last_trade = get_last_trade(symbol)
     d = get_prev(symbol)
 
+    # 🔍 Diagnostic log
     print("LAST:", last_trade, "PREV:", d)
 
     if not last_trade and not d:
@@ -233,7 +234,7 @@ def analyze():
         stop = f"{round(price * 1.01, 2)} – invalidation"
         targets = [f"{round(price * 0.985, 2)}", f"{round(price * 0.97, 2)}"]
         tone = "Reversion environment."
-    else:  # day trade default
+    else:  # day default
         entry = f"{round(price * 1.003, 2)} – reclaim momentum"
         stop = f"{support} – below structure"
         targets = [
